@@ -1,6 +1,6 @@
 /*
  =================================================
- CETextViewProtocol
+ CEIndicatorSheetController
  (for CotEditor)
  
  Copyright (C) 2014 CotEditor Project
@@ -8,7 +8,7 @@
  =================================================
  
  encoding="UTF-8"
- Created:2014-04-21 by 1024jp
+ Created:2014-06-07 by 1024jp
  
  -------------------------------------------------
  
@@ -30,14 +30,18 @@
  =================================================
  */
 
-#import <Foundation/Foundation.h>
-#import "CETheme.h"
+#import <Cocoa/Cocoa.h>
 
 
-@protocol CETextViewProtocol
+@interface CEIndicatorSheetController : NSWindowController <NSWindowDelegate>
 
-@required
-- (CGFloat)lineSpacing;
-- (CETheme *)theme;
+@property (readonly) BOOL isCancelled;
+
+
+- (instancetype)initWithMessage:(NSString *)message;
+
+- (void)beginSheetForWindow:(NSWindow *)window;
+- (void)endSheet;
+- (void)progressIndicator:(CGFloat)delta;
 
 @end

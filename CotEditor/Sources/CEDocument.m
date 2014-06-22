@@ -32,13 +32,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #import <objc/message.h>
+#import <sys/xattr.h>
 #import "CEDocument.h"
 #import "CEPrintPanelAccessoryController.h"
 #import "CEUtilities.h"
 #import "ODBEditorSuite.h"
-#import "UKXattrMetadataStore.h"
 #import "NSData+MD5.h"
 #import "constants.h"
+
+
+// constants
+char const XATTR_ENCODING_KEY[] = "com.apple.TextEncoding";
 
 
 @interface CEDocument ()
@@ -364,6 +368,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
     // プリントビュー生成
     CEPrintView *printView = [[CEPrintView alloc] init];
     [printView setString:[[self editorView] string]];
+    [printView setTheme:[[[self editorView] textView] theme]];
     [printView setDocumentName:[self displayName]];
     [printView setFilePath:[[self fileURL] path]];
     [printView setSyntaxName:[[self editorView] syntaxStyleNameToColoring]];
@@ -980,8 +985,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 - (void)setRecolorFlagToWindowControllerWithStyleName:(NSDictionary *)styleNameDict
 // ------------------------------------------------------
 {
-    NSString *oldName = styleNameDict[k_key_oldStyleName];
-    NSString *newName = styleNameDict[k_key_newStyleName];
+    NSString *oldName = styleNameDict[CEOldNameKey];
+    NSString *newName = styleNameDict[CENewNameKey];
     NSString *curStyleName = [[self editorView] syntaxStyleNameToColoring];
 
     if ([oldName isEqualToString:curStyleName]) {
@@ -1103,6 +1108,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
                ([menuItem action] == @selector(setLineEndingCharToCRLF:)) ||
                ([menuItem action] == @selector(setLineEndingChar:))) {
         state = ([menuItem tag] == [[self editorView] lineEndingCharacter]) ? NSOnState : NSOffState;
+    } else if ([menuItem action] == @selector(changeTheme:)) {
+        name = [[[[self editorView] textView] theme] name];
+        if (name && [[menuItem title] isEqualToString:name]) {
+            state = NSOnState;
+        }
     } else if ([menuItem action] == @selector(changeSyntaxStyle:)) {
         name = [[self editorView] syntaxStyleNameToColoring];
         if (name && [[menuItem title] isEqualToString:name]) {
@@ -1345,6 +1355,19 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
     }
     // ツールバーから変更された場合のため、ツールバーアイテムの選択状態をリセット
     [[[self windowController] toolbarController] setSelectEncoding:[self encodingCode]];
+}
+
+
+// ------------------------------------------------------
+/// 新しいテーマを適応
+- (IBAction)changeTheme:(id)sender
+// ------------------------------------------------------
+{
+    CETheme *theme = [CETheme themeWithName:[sender title]];
+    [[[self editorView] textView] setTheme:theme];
+    [[[self editorView] textView] setSelectedRanges:[[[self editorView] textView] selectedRanges]];
+    
+    [[self editorView] recolorAllString];
 }
 
 
@@ -1768,11 +1791,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
         // クリエータなどを設定
         [[NSFileManager defaultManager] setAttributes:attributes ofItemAtPath:[url path] error:nil];
         
-        // ファイル拡張属性(com.apple.TextEncoding)にエンコーディングを保存 (Non-lossy ASCIIの場合は追加しない)
-        if (CFStringConvertNSStringEncodingToEncoding([self encodingCode]) != kCFStringEncodingNonLossyASCII) {
-            NSString *textEncoding = [[self currentIANACharSetName] stringByAppendingFormat:@";%@",
-                                      [@(CFStringConvertNSStringEncodingToEncoding([self encodingCode])) stringValue]];
-            [UKXattrMetadataStore setString:textEncoding forKey:@"com.apple.TextEncoding" atPath:[url path] traverseLink:NO];
+        // ファイル拡張属性(com.apple.TextEncoding)にエンコーディングを保存
+        NSData *encodingData = [[[self currentIANACharSetName] stringByAppendingFormat:@";%u",
+                                 (unsigned int)CFStringConvertNSStringEncodingToEncoding([self encodingCode])]
+                                dataUsingEncoding:NSUTF8StringEncoding];
+        if (encodingData) {
+            setxattr([url fileSystemRepresentation], XATTR_ENCODING_KEY,
+                     [encodingData bytes], [encodingData length], 0, XATTR_NOFOLLOW);
         }
     }
     
@@ -1841,7 +1866,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 {
     NSStringEncoding encoding = NSProprietaryStringEncoding;
 
-    NSString *string = [UKXattrMetadataStore stringForKey:@"com.apple.TextEncoding" atPath:[url path] traverseLink:NO];
+    // get xattr data
+    NSMutableData* data = nil;
+    const char *path = [url fileSystemRepresentation];
+    ssize_t bufferSize = getxattr(path, XATTR_ENCODING_KEY, NULL, 0, 0, XATTR_NOFOLLOW);
+    if (bufferSize > 0) {
+        data = [NSMutableData dataWithLength:bufferSize];
+        getxattr(path, XATTR_ENCODING_KEY, [data mutableBytes], [data length], 0, XATTR_NOFOLLOW);
+    }
+    
+    // parse value
+    NSString *string = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSArray *strings = [string componentsSeparatedByString:@";"];
     if (([strings count] >= 2) && ([strings[1] length] > 1)) {
         // （配列の2番目の要素の末尾には改行コードが付加されているため、長さの最小は1）
